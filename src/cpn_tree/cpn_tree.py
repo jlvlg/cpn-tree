@@ -17,7 +17,7 @@ import copy
 
 class ModelStrategy(StrEnum):
     GBDT = "GBDT"
-    GROUND_TRUTH = "GROUND_TRUTH"
+    LABELS = "LABELS"
 
 
 @dataclass
@@ -47,25 +47,15 @@ class LabelledInstance:
 
 
 @dataclass
-class GroundTruth(Model):
+class Labels(Model):
     instances: list[LabelledInstance] = field(default_factory=list)
-
-
-class InternalModelsComparisons(TypedDict):
-    equal: str
-    different: str
-
-
-class InternalModels(TypedDict):
-    model: Model
-    comparisons: dict[str, InternalModelsComparisons]
 
 
 class CPNTree:
     __slots__ = ["models", "features", "cpn", "instances_place_id", 'comparator_place_id']
 
     def __init__(self, features: list[str]):
-        self.models: InternalModels = cast(InternalModels, {})
+        self.models: dict[str, dict[str, str | Model]] = {}
         self.features: list[str] = [
             CPNTree.__format_text(feature) for feature in features
         ]
@@ -73,7 +63,7 @@ class CPNTree:
 
     @staticmethod
     def __format_text(feature: str):
-        return "_".join(feature.strip().lower().split())
+        return "_".join(feature.replace("/", "_").replace('-', '_').strip().lower().split())
 
     @staticmethod
     def __scrape_tree(
@@ -108,10 +98,9 @@ class CPNTree:
     def get_net(self):
         return self.cpn
 
-    def predict(self, X: pd.DataFrame) :
+    def predict(self, X: pd.DataFrame) -> dict[str, pd.Series]:
         if not len(self.models):
             raise ValueError("You must load at least one model")
-
         if len(
             set(self.features)
             - set(CPNTree.__format_text(str(col)) for col in X.columns)
@@ -125,32 +114,25 @@ class CPNTree:
                 instances += f", {CPNTree.__format_text(str(name))} = {str(value).replace('-', '~')}"
             instances += "}" + ("++\n" if i < len(X) - 1 else ";")
 
-        indices = "val indices ="
-        for i, idx in enumerate(X.index):
-            indices += f"1`{idx}"
-            indices += "++\n" if i < len(X) - 1 else ";"
-
         new = self.__duplicate()
         new.cpn.new_constant(ml=instances)
         instances_place = new.cpn.find(self.instances_place_id)
         if instances_place:
             new.cpn.insert_initmark(instances_place, "instances", posattr=(50, 20))
-        new.cpn.new_constant(ml=indices)
-        comparator_place = new.cpn.find(self.comparator_place_id)
-        if comparator_place:
-            new.cpn.insert_initmark(comparator_place, "indices", posattr=(50, 20))
+
+        new.write_cpn('a.cpn')
 
         access = AccessCPN()
         outputs = access.run(new.cpn)
 
         results = {}
         for name, model in self.models.items():
-            results.setdefault(name, {})
-            for other, comparisons in cast(dict, model)['comparisons'].items():
-                results[name][other] = {
-                    "equal": cast(dict, outputs[comparisons["equal"]])["quantity"],
-                    "different": cast(dict, outputs[comparisons["different"]])["quantity"],
+            results[name] = pd.Series(
+                {
+                    int(cast(dict, d)["idx"]): cast(dict, d)["label"]
+                    for d in outputs[cast(str, model["out_id"])]
                 }
+            )
 
         return results
 
@@ -158,7 +140,7 @@ class CPNTree:
         return (
             "["
             + " andalso\n ".join(
-                f"#{cond['feature']} instance {cond['comp']} {cond['threshold']}"
+                f"#{cond['feature']} instance {cond['comp']} {str(cond['threshold']).replace('-', '~')}"
                 for cond in rule.conditions
             )
             + "]"
@@ -179,12 +161,12 @@ class CPNTree:
         self.cpn.new_variable(name="labelled", _type="LABELLED")
         self.cpn.new_variable(name="labelled_other", _type="LABELLED")
         self.cpn.new_page(name="Main")
-        self.instances_place_id = str(self.cpn.new_place(
+        self.instances_place_id = self.cpn.new_place(
             page="Main",
             posattr=(0, 0),
             name="Dataset",
             _type="INSTANCE",
-        ).get("id"))
+        ).get("id", "20")
         self.cpn.new_trans(
             page="Main", posattr=(200, 0), name="Load instance", size=(100, 40)
         )
@@ -195,22 +177,6 @@ class CPNTree:
             trans="Load instance",
             annot="instance",
         )
-        self.cpn.new_page(name='Comparator')
-        self.cpn.new_place(page='Comparator', posattr=(0, 0), name='Model 1 Input', _type='LABELLED', size=(100,40), port='I/O')
-        self.cpn.new_place(page='Comparator', posattr=(0, -200), name='Model 2 Input', _type='LABELLED', size=(100,40), port='I/O')
-        self.comparator_place_id = str(self.cpn.new_place(page='Comparator', posattr=(400, -100), name='Indices', _type='INT').get('id'))
-        self.cpn.new_trans(page='Comparator', posattr=(400, 0), name='Model 1 eq Model 2', size=(150,40), cond='[#idx labelled = idx andalso #idx labelled_other = idx andalso #label labelled = #label labelled_other]')
-        self.cpn.new_trans(page='Comparator', posattr=(400, -200), name='Model 1 neq Model 2', size=(150,40), cond='[#idx labelled = idx andalso #idx labelled_other = idx andalso #label labelled <> #label labelled_other]', cond_pos=(400, -250))
-        self.cpn.new_arc(page='Comparator', orientation='BOTHDIR', place='Model 1 Input', trans='Model 1 eq Model 2', annot='labelled')
-        self.cpn.new_arc(page='Comparator', orientation='BOTHDIR', place='Model 2 Input', trans='Model 1 eq Model 2', annot='labelled_other')
-        self.cpn.new_arc(page='Comparator', orientation='BOTHDIR', place='Model 1 Input', trans='Model 1 neq Model 2', annot='labelled', annot_pos=(265, -165))
-        self.cpn.new_arc(page='Comparator', orientation='BOTHDIR', place='Model 2 Input', trans='Model 1 neq Model 2', annot='labelled_other', annot_pos=(265, -35))
-        self.cpn.new_arc(page='Comparator', orientation='PTOT', place='Indices', trans='Model 1 eq Model 2', annot='idx', annot_pos=(400, -50))
-        self.cpn.new_arc(page='Comparator', orientation='PTOT', place='Indices', trans='Model 1 neq Model 2', annot='idx', annot_pos=(400, -150))
-        self.cpn.new_place(page='Comparator', posattr=(600, 0), name='Equal', port='Out')
-        self.cpn.new_place(page='Comparator', posattr=(600, -200), name='Different', port='Out')
-        self.cpn.new_arc(page='Comparator', orientation='TTOP', trans='Model 1 eq Model 2', place='Equal', annot='1`()')
-        self.cpn.new_arc(page='Comparator', orientation='TTOP', trans='Model 1 neq Model 2', place='Different', annot='1`()')
 
     def compare_models(self, X: pd.DataFrame) -> dict[tuple[str, str], pd.Series]:
         outputs = self.predict(X)
@@ -221,15 +187,15 @@ class CPNTree:
 
         return comparisons
 
-    def add_from_GroundTruth(self, name: str, y_true: pd.Series, label_true: Any):
+    def add_from_labels(self, name: str, y_true: pd.Series, label_true: Any):
         new = self.__duplicate()
 
         if CPNTree.__format_text(name) in new.models:
             raise ValueError("There already is a model with this name")
 
-        model = GroundTruth(
+        model = Labels(
             CPNTree.__format_text(name),
-            ModelStrategy.GROUND_TRUTH,
+            ModelStrategy.LABELS,
             [
                 LabelledInstance(idx=cast(int, idx), label=label == label_true)
                 for idx, label in y_true.items()
@@ -248,8 +214,6 @@ class CPNTree:
         if CPNTree.__format_text(name) in self.models:
             raise ValueError("There already is a model with this name")
 
-        model = TreeBasedModel(CPNTree.__format_text(name), ModelStrategy.GBDT)
-
         params = gbdt.get_params()
         if params["loss"] != "log_loss":
             raise ValueError("Loss function must be log_loss")
@@ -261,35 +225,38 @@ class CPNTree:
             raise KeyError("Feature names must be equal between all models")
 
         init = gbdt.init_
+        multiclass = gbdt.n_classes_ > 2
 
-        if init == "zero":
-            model.add_tree(Tree(rules=[Rule([], 0)], learning_rate=1.0))
-        else:
-            init = cast(DummyClassifier, init)
-            init_params = init.get_params()
-            if (
-                init_params["strategy"] in ["stratified", "uniform"]
-                and init_params["random_state"] is None
-            ):
-                raise ValueError("DummyClassifier must be deterministic")
-            model.add_tree(
-                Tree(
-                    rules=[
-                        Rule([], logit(init.predict_proba(pd.DataFrame([1]))[0][1]))
-                    ],
-                    learning_rate=1.0,
+        for i, _class in enumerate(gbdt.classes_ if multiclass else [gbdt.classes_[1]]):
+            model = TreeBasedModel(CPNTree.__format_text(f'{name}_{_class}'), ModelStrategy.GBDT)
+            if init == "zero":
+                model.add_tree(Tree(rules=[Rule([], 0)], learning_rate=1.0))
+            else:
+                init = cast(DummyClassifier, init)
+                init_params = init.get_params()
+                if (
+                    init_params["strategy"] in ["stratified", "uniform"]
+                    and init_params["random_state"] is None
+                ):
+                    raise ValueError("DummyClassifier must be deterministic")
+                model.add_tree(
+                    Tree(
+                        rules=[
+                            Rule([], gbdt._raw_predict_init([[0] * gbdt.n_features_in_])[0][i if multiclass else 0]) # type: ignore
+                        ],
+                        learning_rate=1.0,
+                    )
                 )
-            )
 
-        for estimator in gbdt.estimators_:
-            model.add_tree(
-                Tree(
-                    rules=CPNTree.__scrape_tree(estimator[0].tree_, new.features),
-                    learning_rate=params["learning_rate"],
+            for estimator in gbdt.estimators_[:, i if multiclass else 0]:
+                model.add_tree(
+                    Tree(
+                        rules=CPNTree.__scrape_tree(estimator.tree_, new.features),
+                        learning_rate=params["learning_rate"],
+                    )
                 )
-            )
 
-        new.__add_model(model)
+            new.__add_model(model)
 
         return new
 
@@ -324,13 +291,13 @@ class CPNTree:
             place=f"{model.name} Input",
             trans=model.name,
         )
-        self.cpn.new_place(
+        out_id = str(self.cpn.new_place(
             page="Main",
             name=f"{model.name} Output",
             _type="LABELLED",
             posattr=(origin[0] + 400, origin[1]),
             size=(100, 40),
-        )
+        ).get('id'))
         self.cpn.new_arc(
             page="Main",
             orientation="TTOP",
@@ -350,8 +317,8 @@ class CPNTree:
         match model.strategy:
             case ModelStrategy.GBDT:
                 self.__add_gbdt(cast(TreeBasedModel, model))
-            case ModelStrategy.GROUND_TRUTH:
-                self.__add_ground_truth(cast(GroundTruth, model))
+            case ModelStrategy.LABELS:
+                self.__add_labels(cast(Labels, model))
 
         self.cpn.instantiate_page(
             page="Main",
@@ -369,22 +336,9 @@ class CPNTree:
             ],
         )
 
-        for i, other in enumerate(self.models):
-            coord1 = (origin[0] + 600 + 250 * i, -200 * len(self.models) + 50)
-            coord2 = (origin[0] + 600 - 250 * i + 250 * (len(self.models) - 1), -200 * i + 50)
-            self.cpn.new_trans(page='Main', posattr=coord2, name=f'{other} vs {model.name}', size=(100, 40))
-            self.cpn.new_arc(page="Main", orientation="BOTHDIR", place=f"{model.name} Output", trans=f"{other} vs {model.name}", bend_points=[(coord2[0] - 100, coord1[1] - 50), (coord2[0] - 100, coord2[1])])
-            self.cpn.new_arc(page="Main", orientation="BOTHDIR", place=f"{other} Output", trans=f"{other} vs {model.name}", bend_points=[(coord2[0], coord2[1] - 50)])
-            eq = self.cpn.new_place(page="Main", name=f"{other} eq {model.name}", posattr=(coord2[0] + 90, coord2[1] + 100), size=(100, 40))
-            neq = self.cpn.new_place(page="Main", name=f"{other} neq {model.name}", posattr=(coord2[0] + 90, coord2[1] + 50), size=(100, 40))
-            self.cpn.new_arc(page="Main", orientation="TTOP", trans=f"{other} vs {model.name}", place=f"{other} eq {model.name}", bend_points=[(coord2[0], coord2[1] + 100)])
-            self.cpn.new_arc(page="Main", orientation="TTOP", trans=f"{other} vs {model.name}", place=f"{other} neq {model.name}", bend_points=[(coord2[0], coord2[1] + 50)])
-            self.cpn.instantiate_page(page='Main', trans=f'{other} vs {model.name}', subpage='Comparator', ports=[{"main_page_place": f'{other} Output', "subpage_place": 'Model 1 Input'}, {"main_page_place": f'{model.name} Output', 'subpage_place': 'Model 2 Input'}, {"main_page_place": f'{other} eq {model.name}', "subpage_place": 'Equal'}, {'main_page_place': f'{other} neq {model.name}', 'subpage_place': 'Different'}])
-            self.models[other]['comparisons'] = {model.name: {'equals': eq, 'different': neq}}
+        self.models[model.name] = {"model": model, 'out_id': out_id}
 
-        self.models[model.name] = {"model": model, 'comparisons': {}}
-
-    def __add_ground_truth(self, model: GroundTruth):
+    def __add_labels(self, model: Labels):
         self.cpn.new_declaration_block(
             block=model.name, text=f"{model.name} Declarations"
         )
