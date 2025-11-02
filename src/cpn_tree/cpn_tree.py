@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from itertools import combinations
 from pathlib import Path
+import re
 from typing import Any, Optional, Sequence, TypedDict, cast
 import xml.dom.minidom
 from cpn_tree.access_cpn import AccessCPN
@@ -33,37 +34,28 @@ class Tree:
 
 
 @dataclass
-class TreeBasedModel(Model):
-    trees: list[Tree] = field(default_factory=list)
+class GBDT(Model):
+    classes: list[str] = field(default_factory=list)
+    class_trees: dict[str, list[Tree]] = field(default_factory=dict)
+    strategy: ModelStrategy = field(default=ModelStrategy.GBDT)
 
-    def add_tree(self, tree: Tree):
-        self.trees.append(tree)
-
-
-@dataclass
-class LabelledInstance:
-    idx: int
-    label: bool
-
-
-@dataclass
-class Labels(Model):
-    instances: list[LabelledInstance] = field(default_factory=list)
+    @property
+    def multiclass(self):
+        return len(self.classes) > 2
 
 
 class CPNTree:
-    __slots__ = ["models", "features", "cpn", "instances_place_id", 'comparator_place_id']
+    __slots__ = ["models", "cpn", "features", "instance_place_ids"]
 
-    def __init__(self, features: list[str]):
+    def __init__(self):
         self.models: dict[str, dict[str, str | Model]] = {}
-        self.features: list[str] = [
-            CPNTree.__format_text(feature) for feature in features
-        ]
+        self.features = []
+        self.instance_place_ids: list[str] = []
         self.__build_net()
 
     @staticmethod
-    def __format_text(feature: str):
-        return "_".join(feature.replace("/", "_").replace('-', '_').strip().lower().split())
+    def format_text(text: str):
+        return re.sub(r'[^a-zA-Z0-9_]', '_', text.strip())
 
     @staticmethod
     def __scrape_tree(
@@ -78,7 +70,7 @@ class CPNTree:
             return [Rule(path, value)]
 
         feature_i = cast(int, tree.feature[id])
-        feature = CPNTree.__format_text(feature_names[feature_i])
+        feature = CPNTree.format_text(feature_names[feature_i])
 
         left_path = path + [
             {"feature": feature, "comp": CompOp.LTE, "threshold": threshold}
@@ -102,8 +94,7 @@ class CPNTree:
         if not len(self.models):
             raise ValueError("You must load at least one model")
         if len(
-            set(self.features)
-            - set(CPNTree.__format_text(str(col)) for col in X.columns)
+            set(self.features) - set(self.format_text(str(col)) for col in X.columns)
         ):
             raise KeyError("X must contain every feature seen during scan and no more")
 
@@ -111,16 +102,15 @@ class CPNTree:
         for i, (idx, row) in enumerate(X.iterrows()):
             instances += f"1`{{idx = {idx}"
             for name, value in row.items():
-                instances += f", {CPNTree.__format_text(str(name))} = {str(value).replace('-', '~')}"
+                instances += f", {self.format_text(str(name))} = {str(value).replace('-', '~')}"
             instances += "}" + ("++\n" if i < len(X) - 1 else ";")
 
         new = self.__duplicate()
         new.cpn.new_constant(ml=instances)
-        instances_place = new.cpn.find(self.instances_place_id)
-        if instances_place:
-            new.cpn.insert_initmark(instances_place, "instances", posattr=(50, 20))
-
-        new.write_cpn('a.cpn')
+        for instance_place_id in self.instance_place_ids:
+            instances_place = new.cpn.find(instance_place_id)
+            if instances_place:
+                new.cpn.insert_initmark(instances_place, "instances", posattr=(50, 20))
 
         access = AccessCPN()
         outputs = access.run(new.cpn)
@@ -148,89 +138,48 @@ class CPNTree:
 
     def __build_net(self):
         self.cpn = CPN()
-        self.cpn.new_color(name="LABELLED", _type={"idx": "INT", "label": "BOOL"})
-        self.cpn.new_color(
-            name="INSTANCE",
-            _type={
-                "idx": "INT",
-                **{feature: "REAL" for feature in self.features},
-            },
-        )
-        self.cpn.new_variable(name="instance", _type="INSTANCE")
-        self.cpn.new_variable(name="idx", _type="INT")
-        self.cpn.new_variable(name="labelled", _type="LABELLED")
-        self.cpn.new_variable(name="labelled_other", _type="LABELLED")
-        self.cpn.new_page(name="Main")
-        self.instances_place_id = self.cpn.new_place(
-            page="Main",
-            posattr=(0, 0),
-            name="Dataset",
-            _type="INSTANCE",
-        ).get("id", "20")
-        self.cpn.new_trans(
-            page="Main", posattr=(200, 0), name="Load instance", size=(100, 40)
-        )
-        self.cpn.new_arc(
-            page="Main",
-            orientation="PTOT",
-            place="Dataset",
-            trans="Load instance",
-            annot="instance",
-        )
-
-    def compare_models(self, X: pd.DataFrame) -> dict[tuple[str, str], pd.Series]:
-        outputs = self.predict(X)
-
-        comparisons = {}
-        for (name1, out1), (name2, out2) in combinations(outputs.items(), 2):
-            comparisons[(name1, name2)] = out1 == out2.reindex(out1.index)
-
-        return comparisons
-
-    def add_from_labels(self, name: str, y_true: pd.Series, label_true: Any):
-        new = self.__duplicate()
-
-        if CPNTree.__format_text(name) in new.models:
-            raise ValueError("There already is a model with this name")
-
-        model = Labels(
-            CPNTree.__format_text(name),
-            ModelStrategy.LABELS,
-            [
-                LabelledInstance(idx=cast(int, idx), label=label == label_true)
-                for idx, label in y_true.items()
-            ],
-        )
-
-        new.__add_model(model)
-
-        return new
+        self.cpn.new_color(name="LABELLED", type_={"idx": "INT", "label": "STRING"})
+        self.cpn.new_variable(name="idx", type_="INT")
+        self.cpn.new_variable(name="labelled", type_="LABELLED")
 
     def add_from_GradientBoostingClassifier(
         self, name: str, gbdt: GradientBoostingClassifier
     ):
         new = self.__duplicate()
 
-        if CPNTree.__format_text(name) in self.models:
+        if new.format_text(name) in new.models:
             raise ValueError("There already is a model with this name")
 
         params = gbdt.get_params()
         if params["loss"] != "log_loss":
             raise ValueError("Loss function must be log_loss")
 
-        if len(
-            set(CPNTree.__format_text(feature) for feature in gbdt.feature_names_in_)
-            - set(new.features)
-        ):
+        features = [new.format_text(feature) for feature in gbdt.feature_names_in_]
+
+        if not len(new.features):
+            new.features = features
+            new.cpn.new_color(
+                name="INSTANCE",
+                type_={
+                    "idx": "INT",
+                    **{feature: "REAL" for feature in new.features},
+                },
+            )
+            new.cpn.new_variable(name="instance", type_="INSTANCE")
+        elif len(set(features) - set(new.features)):
             raise KeyError("Feature names must be equal between all models")
 
-        init = gbdt.init_
-        multiclass = gbdt.n_classes_ > 2
 
-        for i, _class in enumerate(gbdt.classes_ if multiclass else [gbdt.classes_[1]]):
-            model = TreeBasedModel(CPNTree.__format_text(f'{name}_{_class}'), ModelStrategy.GBDT)
+        init = gbdt.init_
+        model = GBDT(name=new.format_text(name), classes=[new.format_text(class_) for class_ in gbdt.classes_])
+
+        for i, class_ in enumerate(gbdt.classes_ if model.multiclass else [gbdt.classes_[1]]):
+            class_ = new.format_text(class_)
+            model.class_trees[class_] = []
             if init == "zero":
-                model.add_tree(Tree(rules=[Rule([], 0)], learning_rate=1.0))
+                model.class_trees[class_].append(
+                    Tree(rules=[Rule([], 0)], learning_rate=1.0)
+                )
             else:
                 init = cast(DummyClassifier, init)
                 init_params = init.get_params()
@@ -239,182 +188,59 @@ class CPNTree:
                     and init_params["random_state"] is None
                 ):
                     raise ValueError("DummyClassifier must be deterministic")
-                model.add_tree(
+                model.class_trees[class_].append(
                     Tree(
                         rules=[
-                            Rule([], gbdt._raw_predict_init([[0] * gbdt.n_features_in_])[0][i if multiclass else 0]) # type: ignore
+                            Rule([], gbdt._raw_predict_init([[0] * gbdt.n_features_in_])[0][i if model.multiclass else 0]) # type: ignore
                         ],
                         learning_rate=1.0,
                     )
                 )
 
-            for estimator in gbdt.estimators_[:, i if multiclass else 0]:
-                model.add_tree(
+            for estimator in gbdt.estimators_[:, i if model.multiclass else 0]:
+                model.class_trees[class_].append(
                     Tree(
-                        rules=CPNTree.__scrape_tree(estimator.tree_, new.features),
+                        rules=new.__scrape_tree(estimator.tree_, features),
                         learning_rate=params["learning_rate"],
                     )
                 )
 
-            new.__add_model(model)
-
+        new.__add_model(model)
         return new
 
     def __add_model(self, model: Model):
-        m = len(self.models)
-        origin = (400, -m * 200)
-
-        self.cpn.new_place(
-            page="Main",
-            posattr=origin,
-            name=f"{model.name} Input",
-            _type="INSTANCE",
-            size=(100, 40),
-        )
-        self.cpn.new_arc(
-            page="Main",
-            orientation="TTOP",
-            trans="Load instance",
-            place=f"{model.name} Input",
-            annot="instance",
-            bend_points=[(origin[0] - 200, origin[1])] if m != 0 else [],
-        )
-        self.cpn.new_trans(
-            page="Main",
-            posattr=(origin[0] + 200, origin[1]),
-            name=model.name,
-            size=(100, 40),
-        )
-        self.cpn.new_arc(
-            page="Main",
-            orientation="PTOT",
-            place=f"{model.name} Input",
-            trans=model.name,
-        )
-        out_id = str(self.cpn.new_place(
-            page="Main",
-            name=f"{model.name} Output",
-            _type="LABELLED",
-            posattr=(origin[0] + 400, origin[1]),
-            size=(100, 40),
-        ).get('id'))
-        self.cpn.new_arc(
-            page="Main",
-            orientation="TTOP",
-            trans=model.name,
-            place=f"{model.name} Output",
-        )
         self.cpn.new_page(name=model.name)
-        self.cpn.new_place(
-            page=model.name,
-            posattr=(0, 0),
-            name=f"{model.name} Input",
-            _type="INSTANCE",
-            size=(100, 40),
-            port="In",
+        self.instance_place_ids.append(
+            str(
+                self.cpn.new_place(
+                    page=model.name,
+                    posattr=(0, 0),
+                    name="Instances",
+                    type_="INSTANCE",
+                    size=(100, 40),
+                ).get("id")
+            )
         )
 
+        out_id = ""
         match model.strategy:
             case ModelStrategy.GBDT:
-                self.__add_gbdt(cast(TreeBasedModel, model))
-            case ModelStrategy.LABELS:
-                self.__add_labels(cast(Labels, model))
+                out_id = self.__add_gbdt(cast(GBDT, model))
 
-        self.cpn.instantiate_page(
-            page="Main",
-            subpage=model.name,
-            trans=model.name,
-            ports=[
-                {
-                    "main_page_place": f"{model.name} Input",
-                    "subpage_place": f"{model.name} Input",
-                },
-                {
-                    "main_page_place": f"{model.name} Output",
-                    "subpage_place": f"{model.name} Output",
-                },
-            ],
-        )
+        self.models[model.name] = {"model": model, "out_id": out_id}
 
-        self.models[model.name] = {"model": model, 'out_id': out_id}
-
-    def __add_labels(self, model: Labels):
-        self.cpn.new_declaration_block(
-            block=model.name, text=f"{model.name} Declarations"
-        )
-
-        instances = (
-            f"val {model.name}_instances = "
-            + "++\n".join(
-                [
-                    f"1`{{idx = {instance.idx}, label={str(instance.label).lower()}}}"
-                    for instance in model.instances
-                ]
-            )
-            + ";"
-        )
-        self.cpn.new_constant(ml=instances, block=model.name)
-        self.cpn.new_variable(
-            name=f"{model.name}_labelled_instance", _type="LABELLED", block=model.name
-        )
-
-        self.cpn.new_place(
-            page=model.name,
-            name="Instances",
-            _type="LABELLED",
-            initmark=f"{model.name}_instances",
-            posattr=(0, -100),
-            size=(100, 40),
-        )
-        self.cpn.new_trans(
-            page=model.name,
-            name="Match",
-            posattr=(300, 0),
-            cond=f"[#idx instance = #idx {model.name}_labelled_instance]",
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="PTOT",
-            place=f"{model.name} Input",
-            trans="Match",
-            annot="instance",
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="PTOT",
-            place="Instances",
-            trans="Match",
-            annot=f"{model.name}_labelled_instance",
-            bend_points=[(300, -100)],
-        )
-        self.cpn.new_place(
-            page=model.name,
-            name=f"{model.name} Output",
-            _type="LABELLED",
-            posattr=(600, 0),
-            size=(100, 40),
-            port="Out",
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="TTOP",
-            trans="Match",
-            place=f"{model.name} Output",
-            annot=f"{model.name}_labelled_instance",
-        )
-
-    def __add_gbdt(self, model: TreeBasedModel):
+    def __add_gbdt(self, model: GBDT) -> str:
         self.cpn.new_declaration_block(
             block=model.name, text=f"{model.name} Declarations"
         )
         self.cpn.new_color(
             name=f"{model.name.upper()}_RESULT",
-            _type={"idx": "INT", "result": "REAL"},
+            type_={"idx": "INT", "result": "REAL"},
             block=model.name,
         )
         self.cpn.new_variable(
             name=f"{model.name}_result",
-            _type=f"{model.name.upper()}_RESULT",
+            type_=f"{model.name.upper()}_RESULT",
             block=model.name,
         )
         self.cpn.new_trans(
@@ -423,180 +249,277 @@ class CPNTree:
         self.cpn.new_arc(
             page=model.name,
             orientation="PTOT",
-            trans=f"Load instance",
-            place=f"{model.name} Input",
+            place="Instances",
+            trans="Load instance",
             annot="instance",
+            annot_pos=(100, 10),
         )
-        self.cpn.new_trans(page=model.name, name="Sum", posattr=(1200, 0))
-        for i, tree in enumerate(model.trees):
+        for i, [class_, trees] in enumerate(model.class_trees.items()):
             self.cpn.new_variable(
-                name=f"{model.name}_t{i}_result", _type="REAL", block=model.name
+                name=f"{model.name}_{class_}_result", type_="REAL", block=model.name
             )
             self.cpn.new_place(
                 page=model.name,
-                posattr=(400, -i * 50),
-                name=f"T{i} Input",
-                _type="INSTANCE",
+                posattr=(400, -100 * i),
+                name=f"{class_} Input",
                 size=(100, 40),
+                type_="INSTANCE",
             )
             self.cpn.new_arc(
                 page=model.name,
                 orientation="TTOP",
                 trans="Load instance",
-                place=f"T{i} Input",
+                place=f"{class_} Input",
                 annot="instance",
-                bend_points=[(200, -i * 50)] if i != 0 else [],
+                bend_points=[(200, -100 * i)] if i > 0 else [],
+                annot_pos=(300, -100 * i + 10),
             )
             self.cpn.new_trans(
                 page=model.name,
-                posattr=(600, -i * 50),
-                name=f"{model.name} Tree {i}",
+                posattr=(600, -100 * i),
+                name=f"{model.name}_{class_}",
                 size=(100, 40),
             )
             self.cpn.new_arc(
                 page=model.name,
                 orientation="PTOT",
-                place=f"T{i} Input",
-                trans=f"{model.name} Tree {i}",
+                place=f"{class_} Input",
+                trans=f"{model.name}_{class_}",
             )
             self.cpn.new_place(
                 page=model.name,
-                name=f"T{i} Output",
-                posattr=(800, -i * 50),
-                _type=f"{model.name.upper()}_RESULT",
+                posattr=(800, -100 * i),
+                name=f"{class_} Output",
                 size=(100, 40),
+                type_=f"{model.name.upper()}_RESULT",
             )
             self.cpn.new_arc(
                 page=model.name,
                 orientation="TTOP",
-                trans=f"{model.name} Tree {i}",
-                place=f"T{i} Output",
+                trans=f"{model.name}_{class_}",
+                place=f"{class_} Output",
             )
-            self.cpn.new_page(name=f"{model.name} Tree {i}")
+            self.cpn.new_page(name=f"{model.name}_{class_}")
+
             self.cpn.new_place(
-                page=f"{model.name} Tree {i}",
-                name=f"T{i} Input",
+                page=f"{model.name}_{class_}",
                 posattr=(0, 0),
-                _type="INSTANCE",
-                size=(100, 40),
+                name=f"{class_} Input",
+                type_="INSTANCE",
                 port="In",
             )
+            self.cpn.new_trans(
+                page=f"{model.name}_{class_}",
+                posattr=(0, -100),
+                name="Load instance",
+                size=(100, 40),
+            )
+            self.cpn.new_arc(
+                page=f"{model.name}_{class_}",
+                orientation="PTOT",
+                place=f"{class_} Input",
+                trans=f"Load instance",
+                annot="instance",
+            )
+            max_rules = max(len(tree.rules) for tree in trees)
+            self.cpn.new_trans(
+                page=f"{model.name}_{class_}",
+                name="Sum",
+                posattr=(500, -400 - 100 * max_rules),
+            )
+            for i, tree in enumerate(trees):
+                self.cpn.new_variable(
+                    name=f"{model.name}_{class_}_t{i}_result",
+                    type_="REAL",
+                    block=model.name,
+                )
+                self.cpn.new_place(
+                    page=f"{model.name}_{class_}",
+                    posattr=(600 * i, -200),
+                    name=f"T{i} Input",
+                    type_="INSTANCE",
+                    size=(100, 40),
+                )
+                self.cpn.new_arc(
+                    page=f"{model.name}_{class_}",
+                    orientation="TTOP",
+                    trans="Load instance",
+                    place=f"T{i} Input",
+                    annot="instance",
+                    bend_points=[(0, -150), (600 * i, -150)],
+                    annot_pos=(600 * i - 300, -140) if i > 0 else None,
+                )
+                self.cpn.new_place(
+                    page=f"{model.name}_{class_}",
+                    posattr=(600 * i + 500, -300 - 100 * max_rules),
+                    name=f"T{i} Output",
+                    type_=f"{model.name.upper()}_RESULT",
+                    size=(100, 40),
+                )
+                self.cpn.new_arc(
+                    page=f"{model.name}_{class_}",
+                    orientation="PTOT",
+                    place=f"T{i} Output",
+                    trans="Sum",
+                    annot=f"{{idx = idx,\nresult = {model.name}_{class_}_t{i}_result}}",
+                    bend_points=[
+                        (500, -350 - 100 * max_rules),
+                        (600 * i + 500, -350 - 100 * max_rules),
+                    ],
+                    annot_pos=(
+                        (600 * i + 200, -340 - 100 * max_rules)
+                        if i > 0
+                        else (400, -340 - 100 * max_rules)
+                    ),
+                )
+                for j, rule in enumerate(tree.rules):
+                    self.cpn.new_trans(
+                        page=f"{model.name}_{class_}",
+                        name=f"T{i} Rule {j}",
+                        posattr=(600 * i + 200, -300 - 100 * j),
+                        cond=self.__rule_to_guard(rule),
+                    )
+                    self.cpn.new_arc(
+                        page=f"{model.name}_{class_}",
+                        orientation="PTOT",
+                        place=f"T{i} Input",
+                        trans=f"T{i} Rule {j}",
+                        annot="instance",
+                        bend_points=[(600 * i, -100 * j - 300)],
+                        annot_pos=(600 * i + 100, -100 * j - 290),
+                    )
+                    self.cpn.new_arc(
+                        page=f"{model.name}_{class_}",
+                        orientation="TTOP",
+                        trans=f"T{i} Rule {j}",
+                        place=f"T{i} Output",
+                        annot=f"{{idx = #idx instance,\nresult = {str(rule.result).replace('-', '~')} *\n{str(tree.learning_rate).replace('-', '~')}}}",
+                        bend_points=[(600 * i + 500, -300 - 100 * j)],
+                        annot_pos=(600 * i + 500, -250 - 100 * j),
+                    )
             self.cpn.new_place(
-                page=f"{model.name} Tree {i}",
-                name=f"T{i} Output",
-                posattr=(800, 0),
-                _type=f"{model.name.upper()}_RESULT",
+                page=f"{model.name}_{class_}",
+                name="Result",
+                posattr=(500, -500 - 100 * max_rules),
+                type_=f"{model.name.upper()}_RESULT",
+            )
+            self.cpn.new_arc(
+                page=f"{model.name}_{class_}",
+                orientation="TTOP",
+                trans="Sum",
+                place="Result",
+                annot=f"{{idx = idx, result = {'+\n'.join(f'{model.name}_{class_}_t{i}_result' for i in range(len(trees)))}}}",
+            )
+            self.cpn.new_trans(
+                page=f"{model.name}_{class_}",
+                name="Sigmoid",
+                posattr=(500, -600 - 100 * max_rules),
+            )
+            self.cpn.new_arc(
+                page=f"{model.name}_{class_}",
+                orientation="PTOT",
+                place="Result",
+                trans="Sigmoid",
+                annot=f"{model.name}_result",
+            )
+            self.cpn.new_place(
+                page=f"{model.name}_{class_}",
+                name=f"{class_} Output",
+                type_=f"{model.name.upper()}_RESULT",
+                posattr=(500, -700 - 100 * max_rules),
                 size=(100, 40),
                 port="Out",
             )
+            self.cpn.new_arc(
+                page=f"{model.name}_{class_}",
+                orientation="TTOP",
+                trans="Sigmoid",
+                place=f"{class_} Output",
+                annot=f"{{idx = #idx {model.name}_result,\nresult = 1.0 / (1.0 + Math.exp(~1.0 * #result {model.name}_result))}}",
+            )
             self.cpn.instantiate_page(
                 page=model.name,
-                subpage=f"{model.name} Tree {i}",
-                trans=f"{model.name} Tree {i}",
+                trans=f"{model.name}_{class_}",
+                subpage=f"{model.name}_{class_}",
                 ports=[
                     {
-                        "main_page_place": f"T{i} Input",
-                        "subpage_place": f"T{i} Input",
+                        "main_page_place": f"{class_} Input",
+                        "subpage_place": f"{class_} Input",
                     },
                     {
-                        "main_page_place": f"T{i} Output",
-                        "subpage_place": f"T{i} Output",
+                        "main_page_place": f"{class_} Output",
+                        "subpage_place": f"{class_} Output",
                     },
                 ],
             )
-
-            for j, rule in enumerate(tree.rules):
+        out_id = str(
+            self.cpn.new_place(
+                page=model.name,
+                name=f"{model.name} Output",
+                type_="LABELLED",
+                posattr=(1800, 0),
+                size=(100, 40),
+            ).get("id")
+        )
+        if len(model.classes) > 2:
+            for i, class_ in enumerate(model.classes):
+                others = [
+                    f"{model.name}_{class_}_result >= {model.name}_{other}_result"
+                    for j, other in enumerate(model.classes)
+                    if i != j
+                ]
+                condition = " andalso\n".join(others)
                 self.cpn.new_trans(
-                    page=f"{model.name} Tree {i}",
-                    name=f"Rule {j}",
-                    posattr=(300, -j * 100),
-                    cond=self.__rule_to_guard(rule),
+                    page=model.name,
+                    posattr=(1400, -100 * i),
+                    name=f"Classify {class_}",
+                    cond=f"[{condition}]",
+                    size=(100, 40),
                 )
+                for j, other in enumerate(model.classes):
+                    self.cpn.new_arc(
+                        page=model.name,
+                        orientation="PTOT",
+                        place=f"{other} Output",
+                        trans=f"Classify {class_}",
+                        annot=f"{{idx = idx, result = {model.name}_{other}_result}}",
+                        annot_pos=(1100, -100 * i + 10 * j + 10),
+                    )
                 self.cpn.new_arc(
-                    page=f"{model.name} Tree {i}",
-                    orientation="PTOT",
-                    place=f"T{i} Input",
-                    trans=f"Rule {j}",
-                    annot="instance",
-                    bend_points=[(0, -j * 100)] if j != 0 else [],
-                )
-                self.cpn.new_arc(
-                    page=f"{model.name} Tree {i}",
+                    page=model.name,
                     orientation="TTOP",
-                    trans=f"Rule {j}",
-                    place=f"T{i} Output",
-                    annot=f"{{idx = #idx instance, result = {str(rule.result).replace('-', '~')} * {str(tree.learning_rate).replace('-', '~')}}}",
-                    bend_points=[(800, -j * 100)] if j != 0 else [],
+                    trans=f"Classify {class_}",
+                    place=f"{model.name} Output",
+                    annot=f'{{idx = idx, label = "{class_}"}}',
+                    bend_points=[(1800, -100 * i)] if i > 0 else [],
+                    annot_pos=(1600, -100 * i + 10),
                 )
+        else:
+            neg_class, pos_class = list(model.classes)
+            self.cpn.new_trans(
+                page=model.name, posattr=(1400, 0), name=f"Classify", size=(100, 40)
+            )
             self.cpn.new_arc(
                 page=model.name,
                 orientation="PTOT",
-                place=f"T{i} Output",
-                trans="Sum",
-                annot=f"{{idx = idx, result = {model.name}_t{i}_result}}",
-                bend_points=[(1200, -i * 50)] if i != 0 else [],
+                place=f"{pos_class} Output",
+                trans=f"Classify",
+                annot=f"{{idx = idx, result = {model.name}_{pos_class}_result}}",
+                annot_pos=(1100, 10),
             )
-        self.cpn.new_place(
-            page=model.name,
-            name="Result",
-            posattr=(1600, 0),
-            _type=f"{model.name.upper()}_RESULT",
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="TTOP",
-            trans="Sum",
-            place="Result",
-            annot=f"{{idx = idx, result = {'+\n'.join(f'{model.name}_t{i}_result' for i in range(len(model.trees)))}}}",
-        )
-        self.cpn.new_trans(page=model.name, name="Sigmoid", posattr=(1800, 0))
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="PTOT",
-            place="Result",
-            trans="Sigmoid",
-            annot=f"{model.name}_result",
-        )
-        self.cpn.new_place(
-            page=model.name,
-            name="Probability",
-            _type=f"{model.name.upper()}_RESULT",
-            posattr=(2400, 0),
-            size=(100, 40),
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="TTOP",
-            trans="Sigmoid",
-            place="Probability",
-            annot=f"{{idx = #idx {model.name}_result,\nresult = 1.0 / (1.0 + Math.exp(~1.0 * #result {model.name}_result))}}",
-        )
-        self.cpn.new_trans(page=model.name, name="Classify", posattr=(2600, 0))
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="PTOT",
-            place="Probability",
-            trans="Classify",
-            annot=f"{model.name}_result",
-        )
-        self.cpn.new_place(
-            page=model.name,
-            name=f"{model.name} Output",
-            _type="LABELLED",
-            posattr=(3000, 0),
-            size=(100, 40),
-            port="Out",
-        )
-        self.cpn.new_arc(
-            page=model.name,
-            orientation="TTOP",
-            trans="Classify",
-            place=f"{model.name} Output",
-            annot=f"{{idx = #idx {model.name}_result, label = (#result {model.name}_result) >= 0.5}}",
-        )
+            self.cpn.new_arc(
+                page=model.name,
+                orientation="TTOP",
+                trans=f"Classify",
+                place=f"{model.name} Output",
+                annot=f'{{idx = idx, label = if {model.name}_{pos_class}_result >= 0.5 then "{pos_class}" else "{neg_class}"}}',
+                annot_pos=(1600, 10),
+            )
+        return out_id
 
     def write_cpn(self, path: str | Path):
         with open(path, "w") as f:
             xml.dom.minidom.parseString(str(self.cpn)).writexml(
                 f, addindent="  ", newl="\n"
             )
+        return self

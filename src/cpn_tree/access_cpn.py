@@ -80,4 +80,7 @@ class AccessCPN:
             case 'false':
                 return False
             case _:
-                return float(v)
+                try:
+                    return float(v)
+                except:
+                    return v.replace('"', '')

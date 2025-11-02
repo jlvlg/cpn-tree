@@ -53,13 +53,14 @@ class CPN:
         self.new_declaration_block(block="custom", text="Custom declarations")
         self.new_declaration_block(block="var", text="Variables")
         self.new_declaration_block(block="const", text="Constants")
-        self.new_color(name="UNIT", _type="unit", block="std")
-        self.new_color(name="BOOL", _type="bool", block="std")
-        self.new_color(name="INT", _type="int", block="std")
-        self.new_color(name="INTINF", _type="intinf", block="std")
-        self.new_color(name="TIME", _type="time", block="std")
-        self.new_color(name="REAL", _type="real", block="std")
-        self.new_color(name="STRING", _type="string", block="std")
+        self.new_color(name="UNIT", type_="unit", block="std")
+        self.new_color(name="BOOL", type_="bool", block="std")
+        self.new_color(name="INT", type_="int", block="std")
+        self.new_color(name="INTINF", type_="intinf", block="std")
+        self.new_color(name="TIME", type_="time", block="std")
+        self.new_color(name="REAL", type_="real", block="std")
+        self.new_color(name="STRING", type_="string", block="std")
+        self.__insert(self.net, 'options')
         self.pages: dict[str, ET.Element] = {}
         self.places: dict[str, dict[str, ET.Element]] = {}
         self.trans: dict[str, dict[str, ET.Element]] = {}
@@ -110,26 +111,26 @@ class CPN:
         self.__insert(parent=block_node, tag="id", text=text)
         return block_node
 
-    def new_color(self, name: str, _type: str | dict[str, str], block: str = "custom"):
+    def new_color(self, name: str, type_: str | dict[str, str], block: str = "custom"):
         color = self.__insert_with_id(
             parent=self.declaration_blocks[block], tag="color"
         )
         self.__insert(parent=color, tag="id", text=name)
-        if type(_type) == dict:
+        if type(type_) == dict:
             record = self.__insert(parent=color, tag="record")
-            for key, value in _type.items():
+            for key, value in type_.items():
                 field = self.__insert(parent=record, tag="recordfield")
                 self.__insert(parent=field, tag="id", text=key)
                 self.__insert(parent=field, tag="id", text=value)
         else:
-            self.__insert(parent=color, tag=str(_type))
+            self.__insert(parent=color, tag=str(type_))
         return color
 
-    def new_variable(self, name: str, _type: str, block: str = "var"):
+    def new_variable(self, name: str, type_: str, block: str = "var"):
         var = self.__insert_with_id(parent=self.declaration_blocks[block], tag="var")
         self.__insert(parent=var, tag="id", text=name)
         type_node = self.__insert(parent=var, tag="type")
-        self.__insert(parent=type_node, tag="id", text=_type)
+        self.__insert(parent=type_node, tag="id", text=type_)
         return var
 
     def new_constant(self, ml: str, block: str = "const"):
@@ -162,7 +163,7 @@ class CPN:
         page: str,
         posattr: PosAttr,
         name: str,
-        _type: str = "UNIT",
+        type_: str = "UNIT",
         initmark: str = "",
         size: Size = (60, 40),
         tokenPos: PosAttr = (-10, 0),
@@ -201,7 +202,7 @@ class CPN:
         )
         self.__insert_type(
             element=place,
-            _type=_type,
+            type_=type_,
             posattr=(posattr[0] + 50, posattr[1] - 20),
             fillattr=fillattr,
             lineattr=lineattr,
@@ -212,7 +213,7 @@ class CPN:
         )
         if port:
             self.__insert_port(
-                element=place, _type=port, posattr=(posattr[0] - 30, posattr[1] - 20)
+                element=place, type_=port, posattr=(posattr[0] - 30, posattr[1] - 20)
             )
         return place
 
@@ -258,7 +259,7 @@ class CPN:
     def __insert_type(
         self,
         element: ET.Element,
-        _type: str,
+        type_: str,
         posattr: PosAttr,
         fillattr: FillAttr = {"colour": "White", "pattern": "Solid", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 0, "type": "Solid"},
@@ -272,7 +273,7 @@ class CPN:
         self.__insert(
             parent=type_node,
             tag="text",
-            text=_type,
+            text=type_,
             attrib={"tool": "CPN Tools", "version": "4.0.1"},
         )
         return type_node
@@ -302,14 +303,14 @@ class CPN:
     def __insert_port(
         self,
         element: ET.Element,
-        _type: Literal["Out", "In", 'I/O'],
+        type_: Literal["Out", "In", 'I/O'],
         posattr: PosAttr,
         fillattr: FillAttr = {"colour": "White", "pattern": "Solid", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 0, "type": "Solid"},
         textattr: TextAttr = {"colour": "black", "bold": False},
     ):
         port_node = self.__insert_with_id(
-            parent=element, tag="port", attrib={"type": _type}
+            parent=element, tag="port", attrib={"type": type_}
         )
         self.__insert_posattr(element=port_node, posattr=posattr)
         self.__insert_fillattr(element=port_node, fillattr=fillattr)
@@ -453,7 +454,7 @@ class CPN:
             place_pos = self.__get_pos(self.places[page][place])
             annot_pos = (
                 (trans_pos[0] + place_pos[0]) / 2,
-                (min(trans_pos[1], place_pos[1])) + 10,
+               (trans_pos[1] + place_pos[1]) / 2,
             )
         self.__insert_annot(
             element=arc,
@@ -463,7 +464,7 @@ class CPN:
             lineattr=lineattr,
             textattr=textattr,
         )
-        for point in reversed(bend_points):
+        for point in bend_points:
             self.__insert_bend_point(
                 element=arc,
                 posattr=point,
