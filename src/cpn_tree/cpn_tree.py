@@ -90,7 +90,7 @@ class CPNTree:
     def get_net(self):
         return self.cpn
 
-    def predict(self, X: pd.DataFrame) -> dict[str, pd.Series]:
+    def predict(self, X: pd.DataFrame, write_cpn: Optional[str | Path] = None) -> dict[str, pd.Series]:
         if not len(self.models):
             raise ValueError("You must load at least one model")
         if len(
@@ -111,6 +111,9 @@ class CPNTree:
             instances_place = new.cpn.find(instance_place_id)
             if instances_place:
                 new.cpn.insert_initmark(instances_place, "instances", posattr=(50, 20))
+
+        if write_cpn:
+            new.write_cpn(write_cpn)
 
         access = AccessCPN()
         outputs = access.run(new.cpn)
