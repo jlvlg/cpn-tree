@@ -16,12 +16,16 @@ class AccessCPN:
             headers=self.headers,
             json={"complex_verify": True, "need_sim_restart": True, "xml": str(cpn)},
         )
+        if (r.status_code != 200):
+            raise ConnectionError('Could not connect to AccessCPN Spring server')
         return r.json()
 
     def start_simulator(self):
         r = requests.post(
             f"{self.base_url}/sim/init", headers=self.headers, json={"options": {}}
         )
+        if (r.status_code != 200):
+            raise ConnectionError('Could not connect to AccessCPN Spring server')
         return r.json()
 
     def step_fast_forward(self, steps=10000):
@@ -36,6 +40,8 @@ class AccessCPN:
                 "untilTime": 0,
             },
         )
+        if (r.status_code != 200):
+            raise ConnectionError('Could not connect to AccessCPN Spring server')
         return r.json()
 
     def run(self, cpn: CPN):
