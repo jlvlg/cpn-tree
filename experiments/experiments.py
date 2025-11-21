@@ -8,30 +8,13 @@
 
 import itertools
 
-columns = [
-    " Packet Length Mean",
-    " Subflow Fwd Bytes",
-    " Flow Packets/s",
-    " Flow IAT Mean",
-    " Flow Duration",
-    " act_data_pkt_fwd",
-    " Fwd Header Length",
-    "Init_Win_bytes_forward",
-    "Subflow Fwd Packets",
-    " Packet Length Variance",
-    " Packet Length Std",
-    " ACK Flag Count",
-    " min_seg_size_forward",
-    " Fwd Packet Length Std",
-    " Label",
-]
 label_col = " Label"
 variables = {
-    "n_estimators": [10, 12, 15, 17],
+    "n_estimators": [10, 12, 14, 16],
     "classes": [
         ["DrDoS_DNS", "BENIGN"],
-        ["TFTP", "DrDoS_UDP", "DrDoS_DNS"],
-        ["DrDoS_NetBIOS", "DrDoS_SSDP", "TFTP", "BENIGN"],
+        ["DrDoS_NetBIOS", "DrDoS_SSDP", "TFTP"],
+        ["DrDoS_LDAP", "DrDoS_DNS", "DrDoS_NTP", "DrDoS_MSSQL"],
     ],
     "samples": [1000, 2000, 3000, 4000],
 }
@@ -67,7 +50,7 @@ import pandas as pd
 # In[ ]:
 
 
-benign = pd.read_csv('datasets/Benign.csv', usecols=columns)
+benign = pd.read_csv('datasets/Benign.csv')
 benign.replace([np.inf, -np.inf], np.nan, inplace=True)
 benign.dropna(inplace=True)
 
@@ -75,13 +58,13 @@ benign.dropna(inplace=True)
 # In[ ]:
 
 
-df = pd.read_csv("datasets/NDDoS.csv", usecols=columns)
+dos = pd.read_csv("datasets/NDDoS.csv")
 
 
 # In[ ]:
 
 
-dfb = pd.concat([df, benign], ignore_index=True)
+df = pd.concat([dos, benign], ignore_index=True)
 
 
 # # Experiments
@@ -108,9 +91,50 @@ def execute_scenario(scenario):
     n_classes = len(scenario["classes"])
     base_n = scenario["samples"] // n_classes
     remainder = scenario["samples"] % n_classes
-    remainder_classes = np.random.RandomState(42).choice(scenario["classes"], remainder, replace=False)
+    remainder_classes = np.random.RandomState(42).choice(
+        scenario["classes"], remainder, replace=False
+    )
 
-    sampled = [dfb[dfb[label_col] == class_].sample(base_n + (1 if class_ in remainder_classes else 0), random_state=42) for class_ in scenario['classes']]
+    if "BENIGN" in scenario["classes"]:
+        columns = [
+            " Packet Length Mean",
+            " Subflow Fwd Bytes",
+            " Flow Packets/s",
+            " Flow IAT Mean",
+            " Flow Duration",
+            " act_data_pkt_fwd",
+            " Fwd Header Length",
+            "Init_Win_bytes_forward",
+            "Subflow Fwd Packets",
+            " Packet Length Variance",
+            " Packet Length Std",
+            " ACK Flag Count",
+            " min_seg_size_forward",
+            " Fwd Packet Length Std",
+            " Label",
+        ]
+    else:
+        columns = [
+            "Flow Bytes/s",
+            "Total Length of Fwd Packets",
+            "Fwd Packets/s",
+            " Flow Duration",
+            " Fwd Header Length",
+            "Subflow Fwd Packets",
+            " ACK Flag Count",
+            " min_seg_size_forward",
+            " Fwd IAT Min",
+            " Packet Length Variance",
+            " Packet Length Std",
+            " Label",
+        ]
+    dfb = df[columns]
+    sampled = [
+        dfb[dfb[label_col] == class_].sample(
+            base_n + (1 if class_ in remainder_classes else 0), random_state=42
+        )
+        for class_ in scenario["classes"]
+    ]
     df_minor = pd.concat(sampled, ignore_index=True)
     X, y = df_minor.drop(columns=[label_col]), df_minor[label_col]
 
@@ -121,7 +145,7 @@ def execute_scenario(scenario):
 
     cpn = CPNTree().add_from_GradientBoostingClassifier("gbm", gbm)
     start_time = time.time()
-    net_predictions = cpn.predict(X, write_cpn=Path(path, 'net.cpn'))
+    net_predictions = cpn.predict(X, write_cpn=Path(path, "net.cpn"))
     elapsed_time = time.time() - start_time
 
     with open(Path(path, "model.pkl"), "wb") as f:
@@ -136,16 +160,16 @@ def execute_scenario(scenario):
 
 import datetime 
 
-for scenario in scenarios:
+for i, scenario in enumerate(scenarios):
     path = Path(
         f"out/{'-'.join(scenario['classes'])}/{scenario['n_estimators']}_estimators/{scenario['samples']}_samples/"
     )
     if not (Path(path, 'model.pkl').exists() and Path(path, 'net.pkl').exists() or Path(path, 'skipped').exists()): 
-        print(f'Executing scenario at {datetime.datetime.now()}: {scenario}')
+        print(f'Executing scenario {i} at {datetime.datetime.now()}: {scenario}')
         execute_scenario(scenario)
 
     if Path(path, 'model.pkl').exists() and Path(path, 'net.pkl').exists():
-        print(f"Scenario results: {scenario}")
+        print(f"Scenario {i} results: {scenario}")
         with open(Path(path, 'model.pkl'), 'rb') as f:
             model_predictions = pkl.load(f).apply(CPNTree.format_text)
         with open(Path(path, 'net.pkl'), "rb") as f:
@@ -155,4 +179,5 @@ for scenario in scenarios:
         comparisons = model_predictions == net_predictions
         print(f"Matches: {len(comparisons[comparisons])}/{len(comparisons)} -> {comparisons.mean() * 100}%/100%")
         print(f"Elapsed time: {elapsed_time} seconds / {elapsed_time/60} minutes / {elapsed_time/3600} hours")
+        print()
 

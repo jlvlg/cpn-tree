@@ -22,7 +22,9 @@ class AccessCPN:
 
     def start_simulator(self):
         r = requests.post(
-            f"{self.base_url}/sim/init", headers=self.headers, json={"options": {}}
+            f"{self.base_url}/sim/init",
+            headers=self.headers,
+            json={"options": {}},
         )
         if (r.status_code != 200):
             raise ConnectionError('Could not connect to AccessCPN Spring server')
@@ -47,8 +49,8 @@ class AccessCPN:
     def run(self, cpn: CPN):
         self.load(cpn)
         self.start_simulator()
-        while len((r := self.step_fast_forward())['enableTrans']):
-            self.step_fast_forward()
+        while len((r := self.step_fast_forward())["enableTrans"]):
+            pass
         return self.__parse_tokens(r['tokensAndMark'])
 
     @staticmethod

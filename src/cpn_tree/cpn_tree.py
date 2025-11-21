@@ -402,43 +402,18 @@ class CPNTree:
                     )
             self.cpn.new_place(
                 page=f"{model.name}_{class_}",
-                name="Result",
-                posattr=(500, -500 - 100 * max_rules),
-                type_=f"{model.name.upper()}_RESULT",
-            )
-            self.cpn.new_arc(
-                page=f"{model.name}_{class_}",
-                orientation="TTOP",
-                trans="Sum",
-                place="Result",
-                annot=f"{{idx = idx, result = {'+\n'.join(f'{model.name}_{class_}_t{i}_result' for i in range(len(trees)))}}}",
-            )
-            self.cpn.new_trans(
-                page=f"{model.name}_{class_}",
-                name="Sigmoid",
-                posattr=(500, -600 - 100 * max_rules),
-            )
-            self.cpn.new_arc(
-                page=f"{model.name}_{class_}",
-                orientation="PTOT",
-                place="Result",
-                trans="Sigmoid",
-                annot=f"{model.name}_result",
-            )
-            self.cpn.new_place(
-                page=f"{model.name}_{class_}",
                 name=f"{class_} Output",
                 type_=f"{model.name.upper()}_RESULT",
-                posattr=(500, -700 - 100 * max_rules),
+                posattr=(500, -500 - 100 * max_rules),
                 size=(100, 40),
                 port="Out",
             )
             self.cpn.new_arc(
                 page=f"{model.name}_{class_}",
                 orientation="TTOP",
-                trans="Sigmoid",
+                trans="Sum",
                 place=f"{class_} Output",
-                annot=f"{{idx = #idx {model.name}_result,\nresult = 1.0 / (1.0 + Math.exp(~1.0 * #result {model.name}_result))}}",
+                annot=f"{{idx = idx, result = {'+\n'.join(f'{model.name}_{class_}_t{i}_result' for i in range(len(trees)))}}}",
             )
             self.cpn.instantiate_page(
                 page=model.name,
@@ -467,7 +442,7 @@ class CPNTree:
         if len(model.classes) > 2:
             for i, class_ in enumerate(model.classes):
                 others = [
-                    f"{model.name}_{class_}_result >= {model.name}_{other}_result"
+                    f"{model.name}_{class_}_result {'>=' if j > i else '>'} {model.name}_{other}_result"
                     for j, other in enumerate(model.classes)
                     if i != j
                 ]
@@ -515,7 +490,7 @@ class CPNTree:
                 orientation="TTOP",
                 trans=f"Classify",
                 place=f"{model.name} Output",
-                annot=f'{{idx = idx, label = if {model.name}_{pos_class}_result >= 0.5 then "{pos_class}" else "{neg_class}"}}',
+                annot=f'{{idx = idx, label = if {model.name}_{pos_class}_result >= 0.0 then "{pos_class}" else "{neg_class}"}}',
                 annot_pos=(1600, 10),
             )
         return out_id
