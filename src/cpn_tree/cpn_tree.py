@@ -30,7 +30,7 @@ class Model:
 @dataclass
 class Tree:
     rules: list[Rule]
-    learning_rate: Optional[float]
+    learning_rate: Optional[float] = field(default=None)
 
 
 @dataclass
@@ -55,7 +55,7 @@ class CPNTree:
 
     @staticmethod
     def format_text(text: str):
-        return re.sub(r'[^a-zA-Z0-9_]', '_', text.strip())
+        return re.sub(r"[^a-zA-Z0-9_]", "_", text.strip())
 
     @staticmethod
     def __scrape_tree(
@@ -90,7 +90,9 @@ class CPNTree:
     def get_net(self):
         return self.cpn
 
-    def predict(self, X: pd.DataFrame, write_cpn: Optional[str | Path] = None) -> dict[str, pd.Series]:
+    def predict(
+        self, X: pd.DataFrame, write_cpn: Optional[str | Path] = None
+    ) -> dict[str, pd.Series]:
         if not len(self.models):
             raise ValueError("You must load at least one model")
         if len(
@@ -102,7 +104,9 @@ class CPNTree:
         for i, (idx, row) in enumerate(X.iterrows()):
             instances += f"1`{{idx = {idx}"
             for name, value in row.items():
-                instances += f", {self.format_text(str(name))} = {str(value).replace('-', '~')}"
+                instances += (
+                    f", {self.format_text(str(name))} = {str(value).replace('-', '~')}"
+                )
             instances += "}" + ("++\n" if i < len(X) - 1 else ";")
 
         new = self.__duplicate()
@@ -172,17 +176,19 @@ class CPNTree:
         elif len(set(features) - set(new.features)):
             raise KeyError("Feature names must be equal between all models")
 
-
         init = gbdt.init_
-        model = GBDT(name=new.format_text(name), classes=[new.format_text(class_) for class_ in gbdt.classes_])
+        model = GBDT(
+            name=new.format_text(name),
+            classes=[new.format_text(class_) for class_ in gbdt.classes_],
+        )
 
-        for i, class_ in enumerate(gbdt.classes_ if model.multiclass else [gbdt.classes_[1]]):
+        for i, class_ in enumerate(
+            gbdt.classes_ if model.multiclass else [gbdt.classes_[1]]
+        ):
             class_ = new.format_text(class_)
             model.class_trees[class_] = []
             if init == "zero":
-                model.class_trees[class_].append(
-                    Tree(rules=[Rule([], 0)], learning_rate=1.0)
-                )
+                model.class_trees[class_].append(Tree(rules=[Rule([], 0)]))
             else:
                 init = cast(DummyClassifier, init)
                 init_params = init.get_params()
@@ -194,9 +200,8 @@ class CPNTree:
                 model.class_trees[class_].append(
                     Tree(
                         rules=[
-                            Rule([], gbdt._raw_predict_init([[0] * gbdt.n_features_in_])[0][i if model.multiclass else 0]) # type: ignore
+                            Rule([], gbdt._raw_predict_init([[0] * gbdt.n_features_in_])[0][i if model.multiclass else 0])  # type: ignore
                         ],
-                        learning_rate=1.0,
                     )
                 )
 
@@ -391,12 +396,15 @@ class CPNTree:
                         bend_points=[(600 * i, -100 * j - 300)],
                         annot_pos=(600 * i + 100, -100 * j - 290),
                     )
+                    result = str(rule.result).replace('-', '~')
+                    if tree.learning_rate is not None:
+                        result += f' *\n{str(tree.learning_rate).replace('-', '~')}'
                     self.cpn.new_arc(
                         page=f"{model.name}_{class_}",
                         orientation="TTOP",
                         trans=f"T{i} Rule {j}",
                         place=f"T{i} Output",
-                        annot=f"{{idx = #idx instance,\nresult = {str(rule.result).replace('-', '~')} *\n{str(tree.learning_rate).replace('-', '~')}}}",
+                        annot=f"{{idx = #idx instance,\nresult = {result}}}",
                         bend_points=[(600 * i + 500, -300 - 100 * j)],
                         annot_pos=(600 * i + 500, -250 - 100 * j),
                     )
