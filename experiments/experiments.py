@@ -136,6 +136,8 @@ def execute_scenario(scenario):
         for class_ in scenario["classes"]
     ]
     df_minor = pd.concat(sampled, ignore_index=True)
+    print('Label distribution:')
+    print(df_minor[label_col].value_counts())
     X, y = df_minor.drop(columns=[label_col]), df_minor[label_col]
 
     gbm = GradientBoostingClassifier(

@@ -6,6 +6,7 @@ import re
 from typing import Any, Optional, Sequence, TypedDict, cast
 import xml.dom.minidom
 from cpn_tree.access_cpn import AccessCPN
+from sklearn.utils.validation import check_is_fitted
 from .cpn import CPN
 import pandas as pd
 from .rule import Rule, Condition, CompOp
@@ -136,7 +137,7 @@ class CPNTree:
     def __rule_to_guard(self, rule: Rule):
         return (
             "["
-            + " andalso\n ".join(
+            + ",\n".join(
                 f"#{cond['feature']} instance {cond['comp']} {str(cond['threshold']).replace('-', '~')}"
                 for cond in rule.conditions
             )
@@ -147,11 +148,12 @@ class CPNTree:
         self.cpn = CPN()
         self.cpn.new_color(name="LABELLED", type_={"idx": "INT", "label": "STRING"})
         self.cpn.new_variable(name="idx", type_="INT")
-        self.cpn.new_variable(name="labelled", type_="LABELLED")
 
     def add_from_GradientBoostingClassifier(
         self, name: str, gbdt: GradientBoostingClassifier
     ):
+        check_is_fitted(gbdt)
+
         new = self.__duplicate()
 
         if new.format_text(name) in new.models:
@@ -246,11 +248,6 @@ class CPNTree:
             type_={"idx": "INT", "result": "REAL"},
             block=model.name,
         )
-        self.cpn.new_variable(
-            name=f"{model.name}_result",
-            type_=f"{model.name.upper()}_RESULT",
-            block=model.name,
-        )
         self.cpn.new_trans(
             page=model.name, posattr=(200, 0), name="Load instance", size=(100, 40)
         )
@@ -328,12 +325,13 @@ class CPNTree:
                 place=f"{class_} Input",
                 trans=f"Load instance",
                 annot="instance",
+                annot_pos=(50, -50)
             )
             max_rules = max(len(tree.rules) for tree in trees)
             self.cpn.new_trans(
                 page=f"{model.name}_{class_}",
                 name="Sum",
-                posattr=(500, -400 - 100 * max_rules),
+                posattr=(0, -450 - 100 * max_rules),
             )
             for i, tree in enumerate(trees):
                 self.cpn.new_variable(
@@ -343,7 +341,7 @@ class CPNTree:
                 )
                 self.cpn.new_place(
                     page=f"{model.name}_{class_}",
-                    posattr=(600 * i, -200),
+                    posattr=(600 * i, -250),
                     name=f"T{i} Input",
                     type_="INSTANCE",
                     size=(100, 40),
@@ -355,11 +353,11 @@ class CPNTree:
                     place=f"T{i} Input",
                     annot="instance",
                     bend_points=[(0, -150), (600 * i, -150)],
-                    annot_pos=(600 * i - 300, -140) if i > 0 else None,
+                    annot_pos=(600 * i + 50, -200),
                 )
                 self.cpn.new_place(
                     page=f"{model.name}_{class_}",
-                    posattr=(600 * i + 500, -300 - 100 * max_rules),
+                    posattr=(600 * i + 500, -350 - 100 * max_rules),
                     name=f"T{i} Output",
                     type_=f"{model.name.upper()}_RESULT",
                     size=(100, 40),
@@ -371,30 +369,28 @@ class CPNTree:
                     trans="Sum",
                     annot=f"{{idx = idx,\nresult = {model.name}_{class_}_t{i}_result}}",
                     bend_points=[
-                        (500, -350 - 100 * max_rules),
-                        (600 * i + 500, -350 - 100 * max_rules),
+                        (500, -450 - 100 * max_rules),
+                        (600 * i + 500, -450 - 100 * max_rules),
                     ],
                     annot_pos=(
-                        (600 * i + 200, -340 - 100 * max_rules)
-                        if i > 0
-                        else (400, -340 - 100 * max_rules)
+                        (600 * i + 200, -430 - 100 * max_rules)
                     ),
                 )
                 for j, rule in enumerate(tree.rules):
                     self.cpn.new_trans(
                         page=f"{model.name}_{class_}",
-                        name=f"T{i} Rule {j}",
-                        posattr=(600 * i + 200, -300 - 100 * j),
+                        name=f"T{i} Rule {j + 1}",
+                        posattr=(600 * i + 200, -350 - 100 * j),
                         cond=self.__rule_to_guard(rule),
                     )
                     self.cpn.new_arc(
                         page=f"{model.name}_{class_}",
                         orientation="PTOT",
                         place=f"T{i} Input",
-                        trans=f"T{i} Rule {j}",
+                        trans=f"T{i} Rule {j + 1}",
                         annot="instance",
-                        bend_points=[(600 * i, -100 * j - 300)],
-                        annot_pos=(600 * i + 100, -100 * j - 290),
+                        bend_points=[(600 * i, -350 - 100 * j)],
+                        annot_pos=(600 * i + 100, -340 - 100 * j),
                     )
                     result = str(rule.result).replace('-', '~')
                     if tree.learning_rate is not None:
@@ -402,17 +398,17 @@ class CPNTree:
                     self.cpn.new_arc(
                         page=f"{model.name}_{class_}",
                         orientation="TTOP",
-                        trans=f"T{i} Rule {j}",
+                        trans=f"T{i} Rule {j + 1}",
                         place=f"T{i} Output",
                         annot=f"{{idx = #idx instance,\nresult = {result}}}",
-                        bend_points=[(600 * i + 500, -300 - 100 * j)],
-                        annot_pos=(600 * i + 500, -250 - 100 * j),
+                        bend_points=[(600 * i + 500, -350 - 100 * j)],
+                        annot_pos=(600 * i + 500, -300 - 100 * j),
                     )
             self.cpn.new_place(
                 page=f"{model.name}_{class_}",
                 name=f"{class_} Output",
                 type_=f"{model.name.upper()}_RESULT",
-                posattr=(500, -500 - 100 * max_rules),
+                posattr=(0, -550 - 100 * max_rules),
                 size=(100, 40),
                 port="Out",
             )
@@ -421,7 +417,8 @@ class CPNTree:
                 orientation="TTOP",
                 trans="Sum",
                 place=f"{class_} Output",
-                annot=f"{{idx = idx, result = {'+\n'.join(f'{model.name}_{class_}_t{i}_result' for i in range(len(trees)))}}}",
+                annot=f"{{idx = idx,\nresult = {'+\n'.join(f'{model.name}_{class_}_t{i}_result' for i in range(len(trees)))}}}",
+                annot_pos=(250, -550 - 100 * max_rules),
             )
             self.cpn.instantiate_page(
                 page=model.name,
