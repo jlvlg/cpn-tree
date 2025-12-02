@@ -451,7 +451,7 @@ class CPNTree:
                     for j, other in enumerate(model.classes)
                     if i != j
                 ]
-                condition = " andalso\n".join(others)
+                condition = ",\n".join(others)
                 self.cpn.new_trans(
                     page=model.name,
                     posattr=(1400, -100 * i),
