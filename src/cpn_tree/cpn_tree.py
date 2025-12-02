@@ -466,7 +466,7 @@ class CPNTree:
                         place=f"{other} Output",
                         trans=f"Classify {class_}",
                         annot=f"{{idx = idx, result = {model.name}_{other}_result}}",
-                        annot_pos=(1100, -100 * i + 10 * j + 10),
+                        annot_pos=(1100, -100 * i + 10 * (len(model.classes) - j - 1) + 10),
                     )
                 self.cpn.new_arc(
                     page=model.name,
