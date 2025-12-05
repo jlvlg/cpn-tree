@@ -1,31 +1,22 @@
 from dataclasses import dataclass, field
-from enum import StrEnum
-from itertools import combinations
 from pathlib import Path
 import re
-from typing import Any, Optional, Sequence, TypedDict, cast
+from typing import Any, Optional, Sequence, cast
 import xml.dom.minidom
-from cpn_tree.access_cpn import AccessCPN
+from cpn_tree.access_cpn_interface import AccessCPNInterface
 from sklearn.utils.validation import check_is_fitted
 from .cpn import CPN
 import pandas as pd
 from .rule import Rule, Condition, CompOp
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier
-from scipy.special import logit
 import xml.etree.ElementTree as ET
 import copy
-
-
-class ModelStrategy(StrEnum):
-    GBDT = "GBDT"
-    LABELS = "LABELS"
 
 
 @dataclass
 class Model:
     name: str
-    strategy: ModelStrategy
 
 
 @dataclass
@@ -38,7 +29,6 @@ class Tree:
 class GBDT(Model):
     classes: list[str] = field(default_factory=list)
     class_trees: dict[str, list[Tree]] = field(default_factory=dict)
-    strategy: ModelStrategy = field(default=ModelStrategy.GBDT)
 
     @property
     def multiclass(self):
@@ -64,26 +54,27 @@ class CPNTree:
     ) -> list[Rule]:
         left = cast(int, tree.children_left[id])
         right = cast(int, tree.children_right[id])
-        threshold = cast(float, tree.threshold[id])
-        value = cast(Any, tree.value[id, 0, 0])
 
         if left == right:
+            value = cast(Any, tree.value[id, 0, 0])
             return [Rule(path, value)]
 
         feature_i = cast(int, tree.feature[id])
         feature = CPNTree.format_text(feature_names[feature_i])
 
+        threshold = cast(float, tree.threshold[id])
+
         left_path = path + [
             {"feature": feature, "comp": CompOp.LTE, "threshold": threshold}
         ]
-        left_conditions = CPNTree.__scrape_tree(tree, feature_names, left, left_path)
+        left_rules = CPNTree.__scrape_tree(tree, feature_names, left, left_path)
 
         right_path = path + [
             {"feature": feature, "comp": CompOp.GT, "threshold": threshold}
         ]
-        right_conditions = CPNTree.__scrape_tree(tree, feature_names, right, right_path)
+        right_rules = CPNTree.__scrape_tree(tree, feature_names, right, right_path)
 
-        return left_conditions + right_conditions
+        return left_rules + right_rules
 
     def __duplicate(self):
         return copy.deepcopy(self)
@@ -120,7 +111,7 @@ class CPNTree:
         if write_cpn:
             new.write_cpn(write_cpn)
 
-        access = AccessCPN()
+        access = AccessCPNInterface()
         outputs = access.run(new.cpn)
 
         results = {}
@@ -233,9 +224,8 @@ class CPNTree:
         )
 
         out_id = ""
-        match model.strategy:
-            case ModelStrategy.GBDT:
-                out_id = self.__add_gbdt(cast(GBDT, model))
+        if isinstance(model, GBDT):
+            out_id = self.__add_gbdt(model)
 
         self.models[model.name] = {"model": model, "out_id": out_id}
 

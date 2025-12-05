@@ -324,7 +324,7 @@ class CPN:
         name: str,
         cond: str = "",
         size: Size = (60, 40),
-        bindingPos: PosAttr = (7, -3),
+        binding_pos: PosAttr = (7, -3),
         cond_pos: Optional[PosAttr] = None, 
         fillattr: FillAttr = {"colour": "White", "pattern": "Solid", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 0, "type": "Solid"},
@@ -347,7 +347,7 @@ class CPN:
         self.__insert(
             parent=trans,
             tag="binding",
-            attrib={"x": str(bindingPos[0]), "y": str(bindingPos[1])},
+            attrib={"x": str(binding_pos[0]), "y": str(binding_pos[1])},
         )
         self.__insert_cond(
             element=trans,
