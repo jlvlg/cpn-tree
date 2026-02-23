@@ -1,7 +1,8 @@
 import re
-from cpn_tree.cpn import CPN
 import uuid
+
 import requests
+from cpn_tree.cpn import CPN
 
 
 class AccessCPNInterface:
@@ -11,18 +12,21 @@ class AccessCPNInterface:
         self.headers = {"X-SessionId": self.session}
 
     def load(self, cpn: CPN):
-        try:  
+        try:
             r = requests.post(
                 f"{self.base_url}/init",
                 headers=self.headers,
-                json={"complex_verify": True, "need_sim_restart": True, "xml": str(cpn)},
+                json={
+                    "complex_verify": True,
+                    "need_sim_restart": True,
+                    "xml": str(cpn),
+                },
             )
-            if (r.status_code != 200):
-                raise ConnectionError('Could not connect to AccessCPN Spring server')
+            if r.status_code != 200:
+                raise ConnectionError("Could not connect to AccessCPN Spring server")
             return r.json()
         except:
-            raise ConnectionError('Could not connect to AccessCPN Spring server')
-
+            raise ConnectionError("Could not connect to AccessCPN Spring server")
 
     def start_simulator(self):
         try:
@@ -31,12 +35,11 @@ class AccessCPNInterface:
                 headers=self.headers,
                 json={"options": {}},
             )
-            if (r.status_code != 200):
-                raise ConnectionError('Could not connect to AccessCPN Spring server')
+            if r.status_code != 200:
+                raise ConnectionError("Could not connect to AccessCPN Spring server")
             return r.json()
         except:
-            raise ConnectionError('Could not connect to AccessCPN Spring server')
-
+            raise ConnectionError("Could not connect to AccessCPN Spring server")
 
     def step_fast_forward(self, steps=10000):
         try:
@@ -51,29 +54,29 @@ class AccessCPNInterface:
                     "untilTime": 0,
                 },
             )
-            if (r.status_code != 200):
-                raise ConnectionError('Could not connect to AccessCPN Spring server')
+            if r.status_code != 200:
+                raise ConnectionError("Could not connect to AccessCPN Spring server")
             return r.json()
         except:
-            raise ConnectionError('Could not connect to AccessCPN Spring server')
+            raise ConnectionError("Could not connect to AccessCPN Spring server")
 
     def run(self, cpn: CPN):
         self.load(cpn)
         self.start_simulator()
         while len((r := self.step_fast_forward())["enableTrans"]):
             pass
-        return self.__parse_tokens(r['tokensAndMark'])
+        return self.__parse_tokens(r["tokensAndMark"])
 
     @staticmethod
     def __parse_tokens(tokens: list[dict]) -> dict[str, list[dict]]:
         result = {}
         for item in tokens:
-            _id = item['id']
-            marking = item.get('marking', '').strip()
-            if marking == '' or marking == 'empty':
+            _id = item["id"]
+            marking = item.get("marking", "").strip()
+            if marking == "" or marking == "empty":
                 result[_id] = []
             else:
-                parts = [p.strip() for p in marking.split('++')]
+                parts = [p.strip() for p in marking.split("++")]
                 result[_id] = [AccessCPNInterface.__parse_token(p) for p in parts]
         return result
 
@@ -85,21 +88,23 @@ class AccessCPNInterface:
             return {}
         body = marking.group(1)
         quantity = int(quantity.group(0))
-        return dict({
-            k.strip(): AccessCPNInterface.__to_value(v.strip())
-            for k, v in (pair.split("=", 1)
-            for pair in body.split(","))
-        }, **{'quantity': quantity })
+        return dict(
+            {
+                k.strip(): AccessCPNInterface.__to_value(v.strip())
+                for k, v in (pair.split("=", 1) for pair in body.split(","))
+            },
+            **{"quantity": quantity},
+        )
 
     @staticmethod
     def __to_value(v: str):
         match v:
             case "true":
                 return True
-            case 'false':
+            case "false":
                 return False
             case _:
                 try:
                     return float(v)
                 except:
-                    return v.replace('"', '')
+                    return v.replace('"', "")

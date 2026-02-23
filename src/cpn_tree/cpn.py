@@ -1,8 +1,8 @@
-import itertools
-from typing import Literal, Optional, Sequence, TypedDict
-import xml.etree.ElementTree as ET
-import xml.dom.minidom as dom
 import copy
+import itertools
+import xml.dom.minidom as dom
+import xml.etree.ElementTree as ET
+from typing import Literal, Optional, Sequence, TypedDict
 
 type PosAttr = tuple[float, float]
 
@@ -60,13 +60,13 @@ class CPN:
         self.new_color(name="TIME", type_="time", block="std")
         self.new_color(name="REAL", type_="real", block="std")
         self.new_color(name="STRING", type_="string", block="std")
-        self.__insert(self.net, 'options')
+        self.__insert(self.net, "options")
         self.pages: dict[str, ET.Element] = {}
         self.places: dict[str, dict[str, ET.Element]] = {}
         self.trans: dict[str, dict[str, ET.Element]] = {}
         self.instances_node = self.__insert(parent=self.net, tag="instances")
         self.instances: dict[str, list[ET.Element]] = {}
-        self.instances_trans_page: dict[str, str] ={}
+        self.instances_trans_page: dict[str, str] = {}
 
     @property
     def next_id(self):
@@ -169,7 +169,7 @@ class CPN:
         tokenPos: PosAttr = (-10, 0),
         markingPos: PosAttr = (0, 0),
         markingHidden: bool = True,
-        port: Optional[Literal["Out", "In", 'I/O']] = None,
+        port: Optional[Literal["Out", "In", "I/O"]] = None,
         fillattr: FillAttr = {"colour": "White", "pattern": "", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 1, "type": "Solid"},
         textattr: TextAttr = {"colour": "Black", "bold": False},
@@ -303,7 +303,7 @@ class CPN:
     def __insert_port(
         self,
         element: ET.Element,
-        type_: Literal["Out", "In", 'I/O'],
+        type_: Literal["Out", "In", "I/O"],
         posattr: PosAttr,
         fillattr: FillAttr = {"colour": "White", "pattern": "Solid", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 0, "type": "Solid"},
@@ -325,7 +325,7 @@ class CPN:
         cond: str = "",
         size: Size = (60, 40),
         binding_pos: PosAttr = (7, -3),
-        cond_pos: Optional[PosAttr] = None, 
+        cond_pos: Optional[PosAttr] = None,
         fillattr: FillAttr = {"colour": "White", "pattern": "Solid", "filled": False},
         lineattr: LineAttr = {"colour": "Black", "thick": 0, "type": "Solid"},
         textattr: TextAttr = {"colour": "black", "bold": False},
@@ -454,7 +454,7 @@ class CPN:
             place_pos = self.__get_pos(self.places[page][place])
             annot_pos = (
                 (trans_pos[0] + place_pos[0]) / 2,
-               (trans_pos[1] + place_pos[1]) / 2,
+                (trans_pos[1] + place_pos[1]) / 2,
             )
         self.__insert_annot(
             element=arc,
@@ -528,27 +528,29 @@ class CPN:
     def __clone_subtree(self, source: ET.Element, destination: ET.Element):
         clone = copy.deepcopy(source)
         for element in clone.iter():
-            if 'id' in element.attrib:
-                element.set('id', self.next_id)
+            if "id" in element.attrib:
+                element.set("id", self.next_id)
         destination.append(clone)
         return clone
 
     def __insert_toplevel_instance(self, page: str):
-        node = self.__insert_with_id(parent=self.instances_node, tag="instance", attrib={"page": str(self.pages[page].get('id'))})
-        self.instances[page] = [
-            node
-        ]
+        node = self.__insert_with_id(
+            parent=self.instances_node,
+            tag="instance",
+            attrib={"page": str(self.pages[page].get("id"))},
+        )
+        self.instances[page] = [node]
 
     def __insert_instance(self, page: str, subpage: str, trans: str):
-        self.instances_trans_page[str(self.trans[page][trans].get('id'))] = subpage
+        self.instances_trans_page[str(self.trans[page][trans].get("id"))] = subpage
         subtree = None
         moved = False
-        if self.instances[subpage][0].get('page'):
+        if self.instances[subpage][0].get("page"):
             subtree = self.instances[subpage].pop(0)
-            subtree.attrib.pop('page')
+            subtree.attrib.pop("page")
             self.instances_node.remove(subtree)
             moved = True
-        else: 
+        else:
             subtree = self.instances[subpage][0]
 
         for instance_block in self.instances[page]:
@@ -556,12 +558,20 @@ class CPN:
             clone.set("trans", str(self.trans[page][trans].get("id")))
             if moved:
                 for el in subtree.iter():
-                    if 'trans' in el.attrib and el in self.instances[self.instances_trans_page[str(el.get('trans'))]]:
+                    if (
+                        "trans" in el.attrib
+                        and el
+                        in self.instances[
+                            self.instances_trans_page[str(el.get("trans"))]
+                        ]
+                    ):
                         self.instances[
                             self.instances_trans_page[str(el.get("trans"))]
                         ].remove(el)
             for el in clone.iter():
-                self.instances[self.instances_trans_page[str(el.get("trans"))]].append(el)
+                self.instances[self.instances_trans_page[str(el.get("trans"))]].append(
+                    el
+                )
 
     def save(self, path: str):
         with open(path, "w") as f:

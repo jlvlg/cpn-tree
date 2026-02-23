@@ -27,7 +27,7 @@ class Rule:
 
     def __repr__(self) -> str:
         if not self.conditions:
-            return f'true: {self.result}'
+            return f"true: {self.result}"
         return (
             " and ".join(
                 [

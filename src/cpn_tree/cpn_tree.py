@@ -1,17 +1,18 @@
+import copy
+import re
+import xml.dom.minidom
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
 from typing import Any, Optional, Sequence, cast
-import xml.dom.minidom
-from cpn_tree.access_cpn_interface import AccessCPNInterface
-from sklearn.utils.validation import check_is_fitted
-from .cpn import CPN
+
 import pandas as pd
-from .rule import Rule, Condition, CompOp
+from cpn_tree.access_cpn_interface import AccessCPNInterface
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier
-import xml.etree.ElementTree as ET
-import copy
+from sklearn.utils.validation import check_is_fitted
+
+from .cpn import CPN
+from .rule import CompOp, Condition, Rule
 
 
 @dataclass
@@ -315,7 +316,7 @@ class CPNTree:
                 place=f"{class_} Input",
                 trans=f"Load instance",
                 annot="instance",
-                annot_pos=(50, -50)
+                annot_pos=(50, -50),
             )
             max_rules = max(len(tree.rules) for tree in trees)
             self.cpn.new_trans(
@@ -362,9 +363,7 @@ class CPNTree:
                         (500, -450 - 100 * max_rules),
                         (600 * i + 500, -450 - 100 * max_rules),
                     ],
-                    annot_pos=(
-                        (600 * i + 200, -430 - 100 * max_rules)
-                    ),
+                    annot_pos=((600 * i + 200, -430 - 100 * max_rules)),
                 )
                 for j, rule in enumerate(tree.rules):
                     self.cpn.new_trans(
@@ -382,9 +381,9 @@ class CPNTree:
                         bend_points=[(600 * i, -350 - 100 * j)],
                         annot_pos=(600 * i + 100, -340 - 100 * j),
                     )
-                    result = str(rule.result).replace('-', '~')
+                    result = str(rule.result).replace("-", "~")
                     if tree.learning_rate is not None:
-                        result += f' *\n{str(tree.learning_rate).replace('-', '~')}'
+                        result += f" *\n{str(tree.learning_rate).replace('-', '~')}"
                     self.cpn.new_arc(
                         page=f"{model.name}_{class_}",
                         orientation="TTOP",
@@ -456,7 +455,10 @@ class CPNTree:
                         place=f"{other} Output",
                         trans=f"Classify {class_}",
                         annot=f"{{idx = idx, result = {model.name}_{other}_result}}",
-                        annot_pos=(1100, -100 * i + 10 * (len(model.classes) - j - 1) + 10),
+                        annot_pos=(
+                            1100,
+                            -100 * i + 10 * (len(model.classes) - j - 1) + 10,
+                        ),
                     )
                 self.cpn.new_arc(
                     page=model.name,
